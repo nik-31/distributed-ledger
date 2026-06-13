@@ -1,8 +1,10 @@
 package com.nikhil.wallet_service.service;
 
 import com.nikhil.wallet_service.entity.*;
+import com.nikhil.wallet_service.event.MoneyTransferredEvent;
 import com.nikhil.wallet_service.exception.InsufficientBalanceException;
 import com.nikhil.wallet_service.exception.WalletNotFoundException;
+import com.nikhil.wallet_service.kafka.MoneyTransferredProducer;
 import com.nikhil.wallet_service.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,7 @@ public class WalletServiceImpl implements WalletService {
     private final LedgerRepository ledgerRepository;
     private final ProcessedRequestRepository processedRequestRepository;
     private final WalletTransactionRepository walletTransactionRepository;
+    private final MoneyTransferredProducer moneyTransferredProducer;
 
     @Override
     public Wallet createWallet(Long userId) {
@@ -212,6 +215,16 @@ public class WalletServiceImpl implements WalletService {
         saveProcessedRequest(idempotencyKey, referenceId);
 
         markTransactionSuccess(transaction);
+
+        MoneyTransferredEvent event = MoneyTransferredEvent.builder()
+                        .referenceId(referenceId)
+                        .fromWalletId(fromWalletId)
+                        .toWalletId(toWalletId)
+                        .amount(amount)
+                        .timestamp(LocalDateTime.now())
+                        .build();
+
+        moneyTransferredProducer.publish(event);
 
         return referenceId;
     }
