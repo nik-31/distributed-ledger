@@ -1,10 +1,10 @@
 package com.nikhil.wallet_service.service;
 
-import com.nikhil.wallet_service.entity.LedgerEntry;
-import com.nikhil.wallet_service.entity.TransactionType;
-import com.nikhil.wallet_service.entity.User;
-import com.nikhil.wallet_service.entity.Wallet;
+import com.nikhil.wallet_service.entity.*;
+import com.nikhil.wallet_service.exception.InsufficientBalanceException;
+import com.nikhil.wallet_service.exception.WalletNotFoundException;
 import com.nikhil.wallet_service.repository.LedgerRepository;
+import com.nikhil.wallet_service.repository.ProcessedRequestRepository;
 import com.nikhil.wallet_service.repository.UserRepository;
 import com.nikhil.wallet_service.repository.WalletRepository;
 import jakarta.transaction.Transactional;
@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -21,7 +23,7 @@ public class WalletServiceImpl implements WalletService {
     private final WalletRepository walletRepository;
     private final UserRepository userRepository;
     private final LedgerRepository ledgerRepository;
-
+    private final ProcessedRequestRepository processedRequestRepository;
 
     @Override
     public Wallet createWallet(Long userId) {
@@ -44,7 +46,7 @@ public class WalletServiceImpl implements WalletService {
 
         Wallet wallet = walletRepository.findById(walletId)
                 .orElseThrow(() ->
-                        new RuntimeException("Wallet not found"));
+                        new WalletNotFoundException("Wallet not found"));
 
         wallet.setBalance(
                 wallet.getBalance().add(amount));
@@ -70,11 +72,10 @@ public class WalletServiceImpl implements WalletService {
 
         Wallet wallet = walletRepository.findById(walletId)
                 .orElseThrow(() ->
-                        new RuntimeException("Wallet not found"));
+                        new WalletNotFoundException("Wallet not found"));
 
         if (wallet.getBalance().compareTo(amount) < 0) {
-            throw new RuntimeException(
-                    "Insufficient balance");
+            throw new InsufficientBalanceException("Insufficient balance");
         }
 
         wallet.setBalance(
@@ -92,5 +93,76 @@ public class WalletServiceImpl implements WalletService {
         ledgerRepository.save(entry);
 
         return wallet;
+    }
+
+    private void createLedgerEntry(Long walletId, BigDecimal amount,
+            TransactionType type, String referenceId, String description) {
+
+        LedgerEntry entry = LedgerEntry.builder()
+                        .walletId(walletId)
+                        .amount(amount)
+                        .type(type)
+                        .referenceId(referenceId)
+                        .description(description)
+                        .createdAt(LocalDateTime.now())
+                        .build();
+
+        ledgerRepository.save(entry);
+    }
+
+    @Override
+    @Transactional
+    public String transfer(Long fromWalletId, Long toWalletId, BigDecimal amount, String idempotencyKey) {
+
+        Optional<ProcessedRequest> existingRequest = processedRequestRepository
+                                                    .findByIdempotencyKey(idempotencyKey);
+
+        if (existingRequest.isPresent()) {
+            return existingRequest
+                    .get()
+                    .getReferenceId();
+        }
+
+        Wallet sourceWallet = walletRepository.findById(fromWalletId)
+                                .orElseThrow(() ->
+                                    new WalletNotFoundException(
+                                        "Source wallet not found"));
+
+        Wallet destinationWallet = walletRepository.findById(toWalletId)
+                                .orElseThrow(() ->
+                                    new WalletNotFoundException(
+                                        "Destination wallet not found"));
+
+        if (sourceWallet.getBalance()
+                .compareTo(amount) < 0) {
+            throw new InsufficientBalanceException(
+                    "Insufficient balance");
+        }
+
+        if (fromWalletId.equals(toWalletId)) {
+            throw new IllegalArgumentException(
+                    "Source and destination wallets cannot be same");
+        }
+        String referenceId = UUID.randomUUID().toString();
+
+        sourceWallet.setBalance(
+                sourceWallet.getBalance().subtract(amount));
+        destinationWallet.setBalance(
+                destinationWallet.getBalance().add(amount));
+
+        walletRepository.save(sourceWallet);
+        walletRepository.save(destinationWallet);
+
+        createLedgerEntry(fromWalletId, amount, TransactionType.DEBIT,referenceId, "Transfer to wallet " + toWalletId);
+        createLedgerEntry(toWalletId, amount, TransactionType.CREDIT,referenceId, "Transfer from wallet " + fromWalletId);
+
+        ProcessedRequest request = ProcessedRequest.builder()
+                        .idempotencyKey(idempotencyKey)
+                        .referenceId(referenceId)
+                        .createdAt(LocalDateTime.now())
+                        .build();
+
+        processedRequestRepository.save(request);
+        return referenceId;
     }
 }

@@ -22,4 +22,7 @@ public class Wallet {
     private Long userId;
 
     private BigDecimal balance;
+
+    @Version
+    private Long version;
 }
