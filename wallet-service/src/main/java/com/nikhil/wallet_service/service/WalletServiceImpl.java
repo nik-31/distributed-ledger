@@ -168,9 +168,9 @@ public class WalletServiceImpl implements WalletService {
         walletRepository.save(destinationWallet);
     }
 
-    private void markTransactionSuccess(WalletTransaction transaction) {
+    private void markTransactionPending(WalletTransaction transaction) {
 
-        transaction.setStatus(TransactionStatus.SUCCESS);
+        transaction.setStatus(TransactionStatus.PENDING);
 
         walletTransactionRepository.save(transaction);
     }
@@ -214,7 +214,7 @@ public class WalletServiceImpl implements WalletService {
 
         saveProcessedRequest(idempotencyKey, referenceId);
 
-        markTransactionSuccess(transaction);
+        markTransactionPending(transaction);
 
         MoneyTransferredEvent event = MoneyTransferredEvent.builder()
                         .referenceId(referenceId)
